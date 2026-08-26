@@ -1,13 +1,16 @@
-name: Deploy ATS ke Hostinger
+name: Deploy Karir ke Hostinger
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Ketik "deploy" untuk konfirmasi kamu yakin mau deploy manual ke server karir'
+        required: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'deploy'
 
     steps:
       - name: Checkout kode
