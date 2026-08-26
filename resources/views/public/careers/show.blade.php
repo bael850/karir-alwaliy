@@ -61,10 +61,10 @@
             <input type="file" id="attachments" name="attachments[]" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" multiple>
             <span class="field-hint">Portfolio, sertifikat, transkrip, dll. Bisa pilih lebih dari satu file.</span>
 
-            @if ($jobPosting->screeningQuestions->isNotEmpty())
+            @if (!empty($jobPosting->screening_questions))
                 <h3 class="section-title">Pertanyaan Tambahan</h3>
 
-                @foreach ($jobPosting->screeningQuestions as $question)
+                @foreach ($jobPosting->screening_questions as $question)
                     <label for="q_{{ $question->id }}">
                         {{ $question->question }}
                         @if ($question->is_required)<span class="required">*</span>@endif
