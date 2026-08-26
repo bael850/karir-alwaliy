@@ -30,7 +30,7 @@
     <div class="card">
         <h2 style="margin-bottom:1.5rem;">Lamar Posisi Ini</h2>
 
-        <form action="{{ route('careers.apply', $jobPosting) }}" method="POST" enctype="multipart/form-data">
+        <form action="{{ route('careers.apply', $jobPosting->slug) }}" method="POST" enctype="multipart/form-data">
             @csrf
 
             <h3 class="section-title">Data Diri</h3>

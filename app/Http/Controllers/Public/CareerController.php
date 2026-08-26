@@ -3,52 +3,55 @@
 namespace App\Http\Controllers\Public;
 
 use App\Http\Controllers\Controller;
-use App\Models\Applicant;
-use App\Models\JobPosting;
-use App\Services\NotificationService;
+use App\Services\AtsApiClient;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\URL;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\View\View;
 
+/**
+ * Versi karir-alwaliy (app publik). Nggak ada Eloquent/DB di sini —
+ * semua data lowongan/lamaran/status diambil lewat AtsApiClient,
+ * yang manggil API di repo ats-alwaliy.
+ */
 class CareerController extends Controller
 {
-    private const DISK = 'public';
-    private const DIR = 'applicant-documents';
+    public function __construct(private AtsApiClient $ats)
+    {
+    }
 
     public function index(Request $request): View
     {
-        $query = JobPosting::where('status', 'published')
-            ->where(function ($q) {
-                $q->whereNull('closing_date')->orWhere('closing_date', '>=', now()->toDateString());
-            })
-            ->with('department')
-            ->latest('opening_date');
+        $json = $this->ats->jobPostings([
+            'q' => $request->query('q'),
+            'page' => $request->query('page'),
+        ])->json();
 
-        if ($request->filled('q')) {
-            $query->where('title', 'like', '%' . $request->q . '%');
-        }
-
-        $jobPostings = $query->paginate(9)->withQueryString();
+        $jobPostings = new LengthAwarePaginator(
+            collect($json['data'] ?? [])->map(fn ($item) => (object) $this->toObject($item)),
+            $json['total'] ?? 0,
+            $json['per_page'] ?? 9,
+            $json['current_page'] ?? 1,
+            ['path' => $request->url(), 'query' => $request->query()]
+        );
 
         return view('public.careers.index', compact('jobPostings'));
     }
 
-    public function show(JobPosting $jobPosting): View
+    public function show(string $slug): View
     {
-        abort_unless($jobPosting->status === 'published', 404);
+        $response = $this->ats->jobPosting($slug);
 
-        $jobPosting->load(['department', 'screeningQuestions']);
+        abort_if($response->status() === 404, 404);
+        $response->throw();
+
+        $jobPosting = (object) $this->toObject($response->json('data'));
 
         return view('public.careers.show', compact('jobPosting'));
     }
 
-    public function apply(Request $request, JobPosting $jobPosting): RedirectResponse
+    public function apply(Request $request, string $slug): RedirectResponse
     {
-        abort_unless($jobPosting->status === 'published', 404);
-
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255'],
@@ -62,83 +65,30 @@ class CareerController extends Controller
             'answers' => ['nullable', 'array'],
         ]);
 
-        // Cari applicant existing by email (biar orang yang udah pernah lamar posisi lain
-        // nggak perlu isi ulang data dari nol), atau bikin baru kalau belum pernah.
-        $applicant = Applicant::withTrashed()->where('email', $validated['email'])->first()
-            ?? new Applicant(['email' => $validated['email']]);
+        unset($validated['cv'], $validated['attachments']);
 
-        if ($applicant->trashed()) {
-            $applicant->restore();
-        }
+        $response = $this->ats->apply($slug, $validated, [
+            'cv' => $request->file('cv'),
+            'attachments' => $request->file('attachments', []),
+        ]);
 
-        $applicant->name = $validated['name'];
-        $applicant->phone = $validated['phone'] ?? $applicant->phone;
-        $applicant->linkedin_url = $validated['linkedin_url'] ?? $applicant->linkedin_url;
-        $applicant->portfolio_url = $validated['portfolio_url'] ?? $applicant->portfolio_url;
-
-        if ($request->boolean('create_account') && empty($applicant->password)) {
-            $applicant->password = Hash::make($validated['password']);
-        }
-
-        $applicant->save();
-
-        if ($applicant->applications()->where('job_posting_id', $jobPosting->id)->exists()) {
+        if ($response->status() === 422) {
             return back()
-                ->withErrors(['email' => 'Email ini sudah pernah dipakai buat melamar posisi ini sebelumnya.'])
+                ->withErrors($response->json('errors') ?? ['email' => $response->json('message')])
                 ->withInput();
         }
 
-        $firstStage = $jobPosting->stages()->orderBy('order')->first();
-
-        $application = $applicant->applications()->create([
-            'job_posting_id' => $jobPosting->id,
-            'current_stage_id' => $firstStage?->id,
-            'source' => 'website',
-            'applied_at' => now(),
-        ]);
-
-        foreach ($jobPosting->screeningQuestions as $question) {
-            $answer = $request->input("answers.{$question->id}");
-
-            if ($answer !== null && $answer !== '') {
-                $application->answers()->create([
-                    'job_screening_question_id' => $question->id,
-                    'answer' => is_array($answer) ? implode(', ', $answer) : $answer,
-                ]);
-            }
-        }
-
-        $cv = $request->file('cv');
-        $application->documents()->create([
-            'type' => 'cv',
-            'original_filename' => $cv->getClientOriginalName(),
-            'path' => $cv->store(self::DIR, self::DISK),
-            'mime_type' => $cv->getClientMimeType(),
-            'size_bytes' => $cv->getSize(),
-        ]);
-
-        foreach ($request->file('attachments', []) as $file) {
-            $application->documents()->create([
-                'type' => 'other',
-                'original_filename' => $file->getClientOriginalName(),
-                'path' => $file->store(self::DIR, self::DISK),
-                'mime_type' => $file->getClientMimeType(),
-                'size_bytes' => $file->getSize(),
-            ]);
-        }
-
-        app(NotificationService::class)->send($application, 'application_received', [
-            'applicant_name' => $applicant->name,
-            'job_title' => $jobPosting->title,
-        ]);
+        $response->throw();
 
         return redirect()
-            ->route('careers.applied', $jobPosting)
-            ->with('status', 'Lamaran kamu berhasil dikirim!');
+            ->route('careers.applied', $slug)
+            ->with('status', $response->json('message') ?? 'Lamaran kamu berhasil dikirim!');
     }
 
-    public function applied(JobPosting $jobPosting): View
+    public function applied(string $slug): View
     {
+        $jobPosting = (object) $this->toObject($this->ats->jobPosting($slug)->json('data'));
+
         return view('public.careers.applied', compact('jobPosting'));
     }
 
@@ -147,42 +97,41 @@ class CareerController extends Controller
         return view('public.careers.status');
     }
 
-    /**
-     * Kirim magic link ke email (kalau terdaftar) buat liat status lamaran,
-     * tanpa perlu login/password.
-     */
     public function sendStatusLink(Request $request): RedirectResponse
     {
         $validated = $request->validate(['email' => ['required', 'email']]);
 
-        $applicant = Applicant::where('email', $validated['email'])->first();
+        $response = $this->ats->sendStatusLink($validated['email']);
 
-        if ($applicant) {
-            $url = URL::temporarySignedRoute(
-                'careers.status.show',
-                now()->addMinutes(30),
-                ['applicant' => $applicant->id]
-            );
-
-            Mail::html(
-                '<p>Halo ' . e($applicant->name) . ',</p>'
-                . '<p>Klik link berikut buat liat status lamaran kamu (berlaku 30 menit):</p>'
-                . '<p><a href="' . $url . '">' . $url . '</a></p>',
-                fn ($message) => $message->to($applicant->email)->subject('Link Cek Status Lamaran - Alwaliy Sejahtera')
-            );
-        }
-
-        // Pesan sama persis baik email terdaftar atau nggak,
-        // biar orang luar nggak bisa nebak email siapa aja yang ada di database.
-        return back()->with('status', 'Kalau email tersebut terdaftar, link cek status sudah kami kirim. Cek inbox/folder spam kamu.');
+        return back()->with('status', $response->json('message'));
     }
 
-    public function showStatus(Request $request, Applicant $applicant): View
+    public function showStatus(Request $request, string $applicant): View
     {
-        abort_unless($request->hasValidSignature(), 403);
+        $response = $this->ats->status($applicant, $request->query());
 
-        $applicant->load(['applications.jobPosting', 'applications.currentStage', 'applications.interviews']);
+        abort_if($response->status() === 403, 403);
+        $response->throw();
+
+        $applicant = (object) $this->toObject($response->json('data'));
 
         return view('public.careers.status_result', compact('applicant'));
+    }
+
+    /**
+     * Ubah array hasil decode JSON jadi stdClass secara rekursif,
+     * biar view yang lama (pakai akses ->properti) tetap jalan.
+     */
+    private function toObject(mixed $data): mixed
+    {
+        if (is_array($data)) {
+            $isList = array_is_list($data);
+
+            $mapped = array_map(fn ($v) => $this->toObject($v), $data);
+
+            return $isList ? $mapped : (object) $mapped;
+        }
+
+        return $data;
     }
 }

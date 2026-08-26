@@ -35,4 +35,10 @@ return [
         ],
     ],
 
+    // API careers di ats-alwaliy — dipanggil lewat App\Services\AtsApiClient
+    'ats_api' => [
+        'base_url' => env('ATS_API_BASE_URL'),
+        'key' => env('ATS_API_KEY'),
+    ],
+
 ];

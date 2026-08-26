@@ -13,7 +13,7 @@
     </form>
 
     @forelse ($jobPostings as $job)
-        <a href="{{ route('careers.show', $job) }}" class="job-card" style="display:block; color:inherit;">
+        <a href="{{ route('careers.show', $job->slug) }}" class="job-card" style="display:block; color:inherit;">
             <h3 style="margin-bottom:.2rem;">{{ $job->title }}</h3>
             <div class="job-meta">{{ $job->department->name }} · {{ $job->location ?? 'Lokasi fleksibel' }}</div>
             <span class="badge-type">{{ ['full_time' => 'Full-time', 'part_time' => 'Part-time', 'contract' => 'Contract', 'internship' => 'Internship'][$job->employment_type] ?? $job->employment_type }}</span>

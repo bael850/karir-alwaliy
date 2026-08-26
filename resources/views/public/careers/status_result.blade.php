@@ -11,15 +11,17 @@
             <div style="display:flex; justify-content:space-between; align-items:flex-start;">
                 <div>
                     <h3 style="margin-bottom:.2rem;">{{ $app->jobPosting->title }}</h3>
-                    <div style="color:var(--muted); font-size:.85rem;">Dilamar {{ $app->applied_at?->format('d M Y') }}</div>
+                    <div style="color:var(--muted); font-size:.85rem;">
+                        Dilamar {{ $app->applied_at ? \Carbon\Carbon::parse($app->applied_at)->format('d M Y') : '-' }}
+                    </div>
                 </div>
                 <span class="badge-type">{{ $app->currentStage->name ?? 'Diproses' }}</span>
             </div>
 
-            @php $nextInterview = $app->interviews->where('status', 'scheduled')->sortBy('scheduled_at')->first(); @endphp
+            @php $nextInterview = collect($app->interviews ?? [])->where('status', 'scheduled')->sortBy('scheduled_at')->first(); @endphp
             @if ($nextInterview)
                 <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid var(--border); font-size:.88rem;">
-                    <strong>Jadwal Interview:</strong> {{ $nextInterview->scheduled_at?->format('d M Y H:i') }}
+                    <strong>Jadwal Interview:</strong> {{ \Carbon\Carbon::parse($nextInterview->scheduled_at)->format('d M Y H:i') }}
                     @if ($nextInterview->location_or_link)
                         · {{ $nextInterview->location_or_link }}
                     @endif
